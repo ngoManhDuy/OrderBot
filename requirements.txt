@@ -1,0 +1,14 @@
+torch>=2.0.0
+transformers>=4.30.0
+numpy>=1.21.0
+soundfile>=0.12.1
+librosa>=0.10.0
+scipy>=1.9.0
+pyaudio>=0.2.11
+webrtcvad>=2.0.10
+openai>=1.0.0
+python-dotenv>=1.0.0
+PyQt5>=5.15.0
+matplotlib>=3.5.0
+jiwer>=3.0.0
+pathlib2>=2.3.7; python_version < "3.4"
