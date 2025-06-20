@@ -5,22 +5,51 @@ import pyaudio
 import numpy as np
 import soundfile as sf
 from transformers import pipeline, AutoModelForSpeechSeq2Seq, AutoTokenizer, AutoFeatureExtractor
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+import librosa
+from scipy.signal import butter, filtfilt
+import webrtcvad
+import collections
+import time
+
+# Load environment variables
+load_dotenv()
 
 
-class WhisperSTT:
-    """Speech-to-Text class using Whisper model"""
+class STT_module:
+    """Speech-to-Text class using Whisper model with Voice Activity Detection - GUI Compatible"""
     
-    def __init__(self, model_name="openai/whisper-medium"):
+    def __init__(self, model_name="openai/whisper-medium", enable_denoising=True, status_callback=None):
         # Audio parameters
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1        # Mono
-        self.RATE = 16000        # 16kHz
-        self.CHUNK = 1024
-        self.RECORD_SECONDS = 5  # Recording duration
+        self.RATE = 16000        # 16kHz for VAD compatibility
+        self.CHUNK = 320         # 20ms frames for VAD (16000 * 0.02)
         self.OUTPUT_FILENAME = "output.wav"
+        self.DENOISED_FILENAME = "output_denoised.wav"
+        
+        # VAD parameters
+        self.vad_aggressiveness = 2  # 0-3, higher = more aggressive
+        self.min_speech_duration = 0.5  # Minimum seconds of speech to process
+        self.max_silence_duration = 2.0  # Max seconds of silence before stopping
+        self.energy_threshold = 500  # Energy threshold for basic voice detection
+        
+        # Denoising settings
+        self.enable_denoising = enable_denoising
+        
+        # Callback for status updates
+        self.status_callback = status_callback
+        
+        # Initialize VAD
+        self.vad = webrtcvad.Vad(self.vad_aggressiveness)
+        
+        # Initialize OpenAI client for LLM correction
+        self.client = OpenAI()
         
         # Load Whisper model components
-        print(f"Loading {model_name} model...")
+        self._update_status(f"Loading {model_name} model...")
         self.model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name)
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
@@ -33,13 +62,40 @@ class WhisperSTT:
             feature_extractor=self.feature_extractor,
             stride_length_s=0
         )
-        print("Model loaded successfully!")
+        self._update_status("Model loaded successfully!")
 
-    def record_audio(self, duration=None, output_filename=None):
-        """Record audio from microphone"""
-        duration = duration or self.RECORD_SECONDS
-        output_filename = output_filename or self.OUTPUT_FILENAME
+    def _update_status(self, message):
+        """Update status through callback if available"""
+        if self.status_callback:
+            self.status_callback(message)
+
+    def calculate_energy(self, audio_frame):
+        """Calculate energy of audio frame"""
+        audio_data = np.frombuffer(audio_frame, dtype=np.int16)
+        return np.sqrt(np.mean(audio_data**2))
+
+    def is_speech(self, audio_frame):
+        """
+        Determine if audio frame contains speech using both VAD and energy
+        """
+        # Energy-based detection
+        energy = self.calculate_energy(audio_frame)
+        energy_speech = energy > self.energy_threshold
         
+        # WebRTC VAD detection (requires specific frame size)
+        try:
+            vad_speech = self.vad.is_speech(audio_frame, self.RATE)
+        except:
+            vad_speech = False
+        
+        # Combine both methods (OR logic)
+        return energy_speech or vad_speech
+
+    def record_with_vad(self, max_duration=30):
+        """
+        Record audio with Voice Activity Detection
+        Returns the recorded audio data or None if no speech detected
+        """
         audio = pyaudio.PyAudio()
         
         try:
@@ -51,62 +107,167 @@ class WhisperSTT:
                 frames_per_buffer=self.CHUNK
             )
             
-            print(f"🎤 Recording for {duration} seconds...")
-            frames = []
+            self._update_status("🎤 Listening for speech...")
             
-            for _ in range(0, int(self.RATE / self.CHUNK * duration)):
-                data = stream.read(self.CHUNK)
-                frames.append(data)
+            # States
+            is_recording = False
+            speech_frames = []
+            silence_counter = 0
+            speech_counter = 0
+            max_frames = int(self.RATE / self.CHUNK * max_duration)
             
-            print("✅ Recording finished")
+            # Buffers
+            silence_threshold_frames = int(self.max_silence_duration * self.RATE / self.CHUNK)
+            speech_threshold_frames = int(self.min_speech_duration * self.RATE / self.CHUNK)
+            
+            for frame_count in range(max_frames):
+                data = stream.read(self.CHUNK, exception_on_overflow=False)
+                
+                # Check if current frame contains speech
+                has_speech = self.is_speech(data)
+                
+                if has_speech:
+                    if not is_recording:
+                        self._update_status("🗣️ Speech detected, recording...")
+                        is_recording = True
+                    
+                    speech_frames.append(data)
+                    speech_counter += 1
+                    silence_counter = 0
+                    
+                else:  # No speech
+                    if is_recording:
+                        silence_counter += 1
+                        speech_frames.append(data)  # Keep recording during brief silences
+                        
+                        # Check if silence duration exceeded threshold
+                        if silence_counter >= silence_threshold_frames:
+                            self._update_status("⏹️ Speech ended, processing...")
+                            break
+                    else:
+                        # Reset counters if we're not recording
+                        speech_counter = 0
+                        silence_counter = 0
             
         finally:
             stream.stop_stream()
             stream.close()
             audio.terminate()
         
-        # Convert to numpy array and save as WAV
-        audio_data = np.frombuffer(b"".join(frames), dtype=np.int16)
-        sf.write(output_filename, audio_data, self.RATE, subtype='PCM_16')
-        print(f"💾 Audio saved: {output_filename}")
+        # Check if we have enough speech
+        if speech_counter < speech_threshold_frames:
+            self._update_status("Not enough speech detected")
+            return None
+        
+        # Convert frames to audio data
+        if speech_frames:
+            audio_data = np.frombuffer(b"".join(speech_frames), dtype=np.int16)
+            return audio_data
+        
+        return None
+
+    def save_audio(self, audio_data, filename=None):
+        """Save audio numpy array to file"""
+        filename = filename or self.OUTPUT_FILENAME
+        sf.write(filename, audio_data, self.RATE, subtype='PCM_16')
 
     def transcribe_audio(self, audio_path=None):
         """Transcribe audio file to text"""
         audio_path = audio_path or self.OUTPUT_FILENAME
         
-        print("🔄 Transcribing audio...")
+        self._update_status("🔄 Transcribing audio...")
         output = self.transcriber(audio_path)
         return output["text"]
 
-    def run_continuous_stt(self):
-        """Run continuous speech-to-text"""
-        print("🚀 Starting continuous Speech-to-Text")
-        print("Press Ctrl+C to stop")
-        print("=" * 50)
+    def correct_with_llm(self, original_text):
+        """
+        Use LLM to correct STT output and ensure it's Vietnamese/English only
+        """
+        self._update_status("🤖 Correcting with LLM...")
         
+        system_prompt = """You are a text correction assistant for a coffee shop speech recognition system. Your tasks:
+
+1. Correct any speech recognition errors in the input text
+2. Ensure the output is ONLY in Vietnamese or English (or both mixed)
+3. If the text appears to be in any other language, respond with exactly: "UNSUPPORTED_LANGUAGE"
+4. Focus on coffee shop context - correct common coffee terminology mistakes
+5. Keep the meaning and intent of the original text
+6. Return only the corrected text, no explanations
+7. Also, you need to modify not just the ordering, but also greetings from the customer
+
+Examples:
+- "một cappuccino" → "một cappuccino" (correct Vietnamese)
+- "I want latte" → "I want a latte" (add missing article)
+- "cap-uh-chino" → "cappuccino" (fix pronunciation errors)
+- "americano medium" → "americano medium" (correct as is)
+- "我想要咖啡" → "UNSUPPORTED_LANGUAGE" (Chinese not supported)
+- " Tên tôi là Duy" → "Tên tôi là Duy" (correct Vietnamese greeting)
+"""
+
         try:
-            while True:
-                # Record audio
-                self.record_audio()
-                
-                # Transcribe
-                text = self.transcribe_audio()
-                
-                # Display result
-                print(f"📝 Transcription: {text}")
-                print("-" * 50)
-                
-        except KeyboardInterrupt:
-            print("\n⏹️  Stopping program...")
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": original_text}
+                ],
+                max_tokens=200,
+                temperature=0.3
+            )
+            
+            corrected_text = response.choices[0].message.content.strip()
+            
+            # Check if language is unsupported
+            if corrected_text == "UNSUPPORTED_LANGUAGE":
+                return "I cannot understand, can you speak again?/Tôi không hiểu ý bạn, bạn có thể nói lại được không?"
+            
+            return corrected_text
+            
+        except Exception as e:
+            self._update_status(f"LLM correction error: {e}")
+            return original_text  # Return original if correction fails
+
+    def process_single_recording(self, max_duration=30):
+        """
+        Process a single recording session and return results
+        Returns tuple: (raw_text, corrected_text) or (None, None) if no speech
+        """
+        # Record with VAD
+        audio_data = self.record_with_vad(max_duration=max_duration)
+        
+        if audio_data is None:
+            return None, None
+        
+        # Save audio
+        self.save_audio(audio_data)
+        
+        # Transcribe
+        raw_text = self.transcribe_audio()
+        
+        # Correct with LLM
+        corrected_text = self.correct_with_llm(raw_text)
+        
+        return raw_text, corrected_text
 
 
 def main():
-    """Main function"""
-    # Initialize STT system
-    stt = WhisperSTT(model_name="openai/whisper-medium")
+    """Main function for testing"""
+    def status_update(message):
+        print(f"Status: {message}")
     
-    # Run continuous STT
-    stt.run_continuous_stt()
+    print("GUI-Compatible STT Module Test")
+    
+    # Initialize STT system
+    stt = STT_module(model_name="openai/whisper-medium", status_callback=status_update)
+    
+    # Test single recording
+    raw_text, corrected_text = stt.process_single_recording()
+    
+    if raw_text:
+        print(f"Raw transcription: {raw_text}")
+        print(f"LLM Corrected: {corrected_text}")
+    else:
+        print("No speech detected")
 
 
 if __name__ == "__main__":
