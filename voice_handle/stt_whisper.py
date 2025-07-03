@@ -14,6 +14,15 @@ import webrtcvad
 import collections
 import time
 
+# Import denoising functions
+from denoise_audio import (
+    comprehensive_denoise, 
+    spectral_subtraction, 
+    bandpass_filter, 
+    noise_gate, 
+    adaptive_filter_denoise
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -171,6 +180,35 @@ class STT_module:
         filename = filename or self.OUTPUT_FILENAME
         sf.write(filename, audio_data, self.RATE, subtype='PCM_16')
 
+    def denoise_audio(self, audio_data):
+        """
+        Apply denoising to audio data using comprehensive denoising pipeline
+        """
+        if not self.enable_denoising:
+            return audio_data
+            
+        self._update_status("🔧 Applying audio denoising...")
+        
+        try:
+            # Convert int16 to float for processing
+            if audio_data.dtype == np.int16:
+                audio_float = audio_data.astype(np.float32) / 32768.0
+            else:
+                audio_float = audio_data.astype(np.float32)
+            
+            # Apply comprehensive denoising
+            denoised_audio = comprehensive_denoise(audio_float, self.RATE, method='all')
+            
+            # Convert back to int16
+            denoised_audio_int16 = (denoised_audio * 32767).astype(np.int16)
+            
+            self._update_status("✅ Denoising completed")
+            return denoised_audio_int16
+            
+        except Exception as e:
+            self._update_status(f"Denoising error: {e}, using original audio")
+            return audio_data
+
     def transcribe_audio(self, audio_path=None):
         """Transcribe audio file to text"""
         audio_path = audio_path or self.OUTPUT_FILENAME
@@ -201,18 +239,19 @@ Examples:
 - "cap-uh-chino" → "cappuccino" (fix pronunciation errors)
 - "americano medium" → "americano medium" (correct as is)
 - "我想要咖啡" → "UNSUPPORTED_LANGUAGE" (Chinese not supported)
-- " Tên tôi là Duy" → "Tên tôi là Duy" (correct Vietnamese greeting)
+- "Tên tôi là Duy" → "Tên tôi là Duy" (correct Vietnamese greeting)
+- "Cho tôi một cốc mắt cha đã say" → "Cho tôi một cốc matcha đá xay"
 """
 
         try:
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": original_text}
                 ],
                 max_tokens=200,
-                temperature=0.3
+                temperature=0.7
             )
             
             corrected_text = response.choices[0].message.content.strip()
@@ -238,11 +277,15 @@ Examples:
         if audio_data is None:
             return None, None
         
-        # Save audio
-        self.save_audio(audio_data)
+        # Apply denoising if enabled
+        denoised_audio = self.denoise_audio(audio_data)
         
-        # Transcribe
-        raw_text = self.transcribe_audio()
+        # Save processed audio for transcription
+        final_filename = self.DENOISED_FILENAME if self.enable_denoising else self.OUTPUT_FILENAME
+        self.save_audio(denoised_audio, final_filename)
+        
+        # Transcribe using the processed audio
+        raw_text = self.transcribe_audio(final_filename)
         
         # Correct with LLM
         corrected_text = self.correct_with_llm(raw_text)
@@ -255,19 +298,26 @@ def main():
     def status_update(message):
         print(f"Status: {message}")
     
-    print("GUI-Compatible STT Module Test")
+    print("STT Module with Integrated Denoising Test")
+    print("=" * 50)
     
-    # Initialize STT system
-    stt = STT_module(model_name="openai/whisper-medium", status_callback=status_update)
+    # Test with denoising enabled
+    print("Testing with denoising enabled...")
+    stt = STT_module(
+        model_name="openai/whisper-medium", 
+        enable_denoising=True,
+        status_callback=status_update
+    )
     
     # Test single recording
     raw_text, corrected_text = stt.process_single_recording()
     
     if raw_text:
-        print(f"Raw transcription: {raw_text}")
-        print(f"LLM Corrected: {corrected_text}")
+        print(f"\n📝 Raw transcription: {raw_text}")
+        print(f"🤖 LLM Corrected: {corrected_text}")
+        print(f"\n📁 Denoised audio saved as: output_denoised.wav")
     else:
-        print("No speech detected")
+        print("❌ No speech detected")
 
 
 if __name__ == "__main__":

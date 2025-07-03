@@ -46,10 +46,10 @@ class VectorStoreManager:
             # Verify the vector store still exists
             try:
                 store = client.vector_stores.retrieve(vector_store_id)
-                print(f"✅ Using existing vector store: {vector_store_id}")
+                print(f"Using existing vector store: {vector_store_id}")
                 return vector_store_id
             except Exception as e:
-                print(f"⚠️ Existing vector store not found, creating new one...")
+                print(f"Existing vector store not found, creating new one...")
                 # Remove invalid config and create new
                 self.config = {}
         
@@ -91,15 +91,17 @@ class VectorStoreManager:
         
         base64_image = self.encode_image(image_path)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
                         "text": "Hãy mô tả chi tiết và đầy đủ về menu Highland Coffee này. "
-                        "Bao gồm: tên các món, kích cỡ, giá cả chính xác. "
+                        "Bao gồm: tên các món, kích cỡ (S tương đương với nhỏ, M tương đương với cỡ vừa và L tương đương với cỡ lớn), giá cả chính xác.Hãy lưu ý là hãy sử dụng chính xác thông tin được ghi trên ảnh nhé "
                         "Hãy tổ chức thông tin rõ ràng theo từng danh mục vàcung cấp thông tin đầy đủ nhất có thể. "
+                        "Hãy viết mô tả bằng cả tiếng anh lẫn tiếng việt nhé, Tôi cần 2 phiên bản cả bằng tiếng anh lẫn bằng tiếng việt."
+                        "Lưu ý là mệnh giá tiền mặc định là việt nam đồng (VNĐ) nhé. Ví dụ một sản phẩn được ghi giá là 36 ở trên menu, tức là nó có giá chính xác là 36.000vnđ (Việt nam đồng). Hãy viết cẩn thận cho tôi nha"
                     },
                     {
                         "type": "image_url",
@@ -107,7 +109,6 @@ class VectorStoreManager:
                     }
                 ]
             }],
-            max_tokens=1000,
             temperature=0.2
         )
         
@@ -123,6 +124,7 @@ class VectorStoreManager:
         
         # Analyze the image
         menu_analysis = self.analyze_image(menu_file)
+        print(menu_analysis)
         
         # Create comprehensive text file
         with open(text_filename, 'w', encoding='utf-8') as f:
