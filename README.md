@@ -54,6 +54,8 @@ sudo apt-get install portaudio19-dev python3-pyaudio
 brew install portaudio
 ```
 
+**Note**: The Program is Running Whisper-medium model locally!
+
 ## How to Run
 
 ### Option 1: Web Interface (Recommended)
