@@ -101,4 +101,4 @@ This project utilizes several powerful APIs and models:
 Special thanks to OpenAI for providing robust speech recognition and language understanding capabilities that make this voice ordering system possible.
 
 
-**Note:** This project is designed for educational and demonstration purposes. For production use, consider additional security measures and error handling.
+**Note:** This project is designed for educational and demonstration purposes.
