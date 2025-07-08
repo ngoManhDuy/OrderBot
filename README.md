@@ -83,7 +83,7 @@ This provides a simpler command-line interface for voice ordering.
 ## Usage
 
 1. **Start the application** using one of the methods above
-2. **Speak your order** when prompted (e.g., "I want a large cappuccino and a croissant")
+2. **Speak your order** when prompted (e.g., "I want a Green Tea Freeze")
 3. **Wait for processing** - the system will transcribe your speech and process the order
 4. **Review the response** from the OrderBot
 5. **Continue the conversation** to modify or complete your order
