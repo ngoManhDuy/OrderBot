@@ -1,4 +1,4 @@
-# ASR FINAL PROJECT: OrderBot - Coffee Ordering in Cofee Shop
+# ASR FINAL PROJECT: OrderBot - Ordering System in Coffee Shop utilizing Voice-based ChatBot
 
 A voice-controlled ordering system for Highland Coffee that combines speech-to-text (STT) capabilities with an intelligent chatbot for seamless coffee ordering experience.
 
