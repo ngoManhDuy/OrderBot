@@ -5,4 +5,4 @@ A voice-controlled ordering system for Highland Coffee that combines speech-to-t
 [![Demo](https://img.youtube.com/vi/17rTX6jBUSc/maxresdefault.jpg)](https://youtu.be/17rTX6jBUSc)
 
 
-**Note:** This project is designed for educational and demonstration purposes.
+**Note:** This project is build for educational and demonstration purposes.
